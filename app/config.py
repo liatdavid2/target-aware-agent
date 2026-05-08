@@ -20,5 +20,5 @@ class AnalyzerConfig:
     use_yolo: bool = True
     draw_non_targets: bool = False
     yolo_confidence: float = 0.35
-    yolo_model_name: str = "yolov8n.pt"
+    yolo_model_name: str = "yolov8n-seg.pt"
     enable_avatar: bool = False

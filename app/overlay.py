@@ -28,6 +28,21 @@ def draw_pose(frame, landmarks: Dict[str, Tuple[int, int]]):
     for point in landmarks.values():
         cv2.circle(frame, point, 3, (0, 255, 255), -1)
 
+def draw_person_segmentation(frame, candidate: dict):
+    polygon = candidate.get("mask_polygon")
+
+    if polygon is None:
+        return
+
+    polygon = np.array(polygon, dtype=np.int32)
+
+    if polygon.ndim != 2 or polygon.shape[0] < 3:
+        return
+
+    overlay = frame.copy()
+    cv2.fillPoly(overlay, [polygon], (80, 160, 255))
+    cv2.addWeighted(overlay, 0.28, frame, 0.72, 0, frame)
+    cv2.polylines(frame, [polygon], True, (80, 160, 255), 2)
 
 def draw_target_overlay(frame, candidate: dict, target_color: str):
     x1, y1, x2, y2 = candidate["bbox"]
@@ -35,6 +50,8 @@ def draw_target_overlay(frame, candidate: dict, target_color: str):
     label = f"TARGET | {target_color} shirt | match {score:.2f}"
 
     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 230, 255), 3)
+
+    draw_person_segmentation(frame, candidate)
 
     polygon = np.array(candidate["shirt_polygon"], dtype=np.int32)
     overlay = frame.copy()

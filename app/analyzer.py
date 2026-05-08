@@ -67,6 +67,7 @@ class VideoAnalyzer:
                 "candidate_id": idx,
                 "bbox": [int(v) for v in bbox],
                 "detector_bbox": [int(v) for v in det.bbox],
+                "mask_polygon": det.mask_polygon,
                 "detector_confidence": float(det.confidence),
                 "pose_detected": bool(pose.pose_detected),
                 "landmarks": {k: [int(p[0]), int(p[1])] for k, p in pose.landmarks.items()},

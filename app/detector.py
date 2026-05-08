@@ -1,6 +1,6 @@
 from dataclasses import dataclass
-from pathlib import Path
-from typing import List
+from typing import List, Optional
+
 import numpy as np
 
 from app.config import MODELS_DIR
@@ -12,10 +12,11 @@ class Detection:
     bbox: List[int]
     confidence: float
     class_name: str = "person"
+    mask_polygon: Optional[List[List[int]]] = None
 
 
 class PersonDetector:
-    def __init__(self, model_name: str = "yolov8n.pt", confidence: float = 0.35):
+    def __init__(self, model_name: str = "yolov8n-seg.pt", confidence: float = 0.35):
         self.model_name = model_name
         self.confidence = confidence
         self.model = None
@@ -23,6 +24,7 @@ class PersonDetector:
     def _load_model(self):
         if self.model is not None:
             return
+
         try:
             from ultralytics import YOLO
         except Exception as exc:
@@ -36,7 +38,9 @@ class PersonDetector:
 
     def detect(self, frame_bgr: np.ndarray, max_people: int = 3) -> List[Detection]:
         self._load_model()
+
         height, width = frame_bgr.shape[:2]
+
         results = self.model.predict(
             frame_bgr,
             conf=self.confidence,
@@ -46,28 +50,62 @@ class PersonDetector:
         )
 
         detections: List[Detection] = []
+
         if not results:
             return detections
 
-        boxes = getattr(results[0], "boxes", None)
+        result = results[0]
+        boxes = getattr(result, "boxes", None)
+        masks = getattr(result, "masks", None)
+
         if boxes is None or boxes.xyxy is None:
             return detections
 
         xyxy = boxes.xyxy.cpu().numpy()
         confs = boxes.conf.cpu().numpy() if boxes.conf is not None else [1.0] * len(xyxy)
 
-        for box, conf in zip(xyxy, confs):
+        mask_polygons = []
+
+        if masks is not None and getattr(masks, "xy", None) is not None:
+            for poly in masks.xy:
+                poly = np.asarray(poly, dtype=np.int32)
+
+                if poly.ndim == 2 and poly.shape[0] >= 3:
+                    mask_polygons.append(poly.tolist())
+                else:
+                    mask_polygons.append(None)
+
+        for idx, (box, conf) in enumerate(zip(xyxy, confs)):
+            mask_polygon = None
+
+            if idx < len(mask_polygons):
+                mask_polygon = mask_polygons[idx]
+
             detections.append(
                 Detection(
                     bbox=clamp_box(box.tolist(), width, height),
                     confidence=float(conf),
+                    class_name="person",
+                    mask_polygon=mask_polygon,
                 )
             )
 
-        detections.sort(key=lambda det: (det.bbox[2] - det.bbox[0]) * (det.bbox[3] - det.bbox[1]), reverse=True)
+        detections.sort(
+            key=lambda det: (det.bbox[2] - det.bbox[0]) * (det.bbox[3] - det.bbox[1]),
+            reverse=True,
+        )
+
         return detections[:max_people]
 
 
 def full_frame_detection(frame_bgr: np.ndarray) -> List[Detection]:
     height, width = frame_bgr.shape[:2]
-    return [Detection(bbox=[0, 0, width - 1, height - 1], confidence=1.0, class_name="full_frame")]
+
+    return [
+        Detection(
+            bbox=[0, 0, width - 1, height - 1],
+            confidence=1.0,
+            class_name="full_frame",
+            mask_polygon=None,
+        )
+    ]
