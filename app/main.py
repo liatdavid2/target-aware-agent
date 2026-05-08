@@ -29,6 +29,7 @@ def analyze_video(
     use_yolo: bool = Form(True),
     draw_non_targets: bool = Form(False),
     yolo_confidence: float = Form(0.35),
+    enable_avatar: bool = Form(False),
 ):
     upload_dir = OUTPUTS_DIR / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -48,6 +49,7 @@ def analyze_video(
         use_yolo=use_yolo,
         draw_non_targets=draw_non_targets,
         yolo_confidence=yolo_confidence,
+        enable_avatar=enable_avatar,
     )
     analyzer = VideoAnalyzer(config)
     summary = analyzer.analyze(upload_path)

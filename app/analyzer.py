@@ -14,6 +14,7 @@ from app.detector import PersonDetector, full_frame_detection
 from app.geometry import resize_keep_aspect
 from app.overlay import draw_header, draw_non_target_overlay, draw_target_overlay
 from app.pose_estimator import PoseEstimator
+from app.avatar import blank_avatar, combine_with_avatar, draw_avatar
 
 
 def _candidate_to_csv_row(frame_id: int, timestamp_sec: float, candidate: dict) -> dict:
@@ -116,7 +117,17 @@ class VideoAnalyzer:
             height, width = frame.shape[:2]
             if writer is None:
                 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                writer = cv2.VideoWriter(str(output_video_path), fourcc, output_fps, (width, height))
+
+                output_width = width
+                if self.config.enable_avatar:
+                    output_width = width + 360
+
+                writer = cv2.VideoWriter(
+                    str(output_video_path),
+                    fourcc,
+                    output_fps,
+                    (output_width, height),
+                )
 
             should_process = frames_processed % max(1, self.config.process_every_n_frames) == 0
             if should_process:
@@ -136,6 +147,29 @@ class VideoAnalyzer:
 
             for candidate in targets:
                 draw_target_overlay(annotated, candidate, self.target_color)
+
+            if self.config.enable_avatar:
+                target_candidate = None
+
+                if targets:
+                    target_candidate = max(
+                        targets,
+                        key=lambda c: c.get("match_score", 0.0),
+                    )
+
+                if target_candidate is not None:
+                    avatar = draw_avatar(
+                        target_candidate.get("landmarks", {}),
+                        height=annotated.shape[0],
+                        width=360,
+                    )
+                else:
+                    avatar = blank_avatar(
+                        height=annotated.shape[0],
+                        width=360,
+                    )
+
+                annotated = combine_with_avatar(annotated, avatar)
 
             writer.write(annotated)
 
