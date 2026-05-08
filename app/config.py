@@ -22,3 +22,6 @@ class AnalyzerConfig:
     yolo_confidence: float = 0.35
     yolo_model_name: str = "yolov8n-seg.pt"
     enable_avatar: bool = False
+
+    avatar_person_position: str = "right"
+    avatar_person_rank_from_right: int = 1

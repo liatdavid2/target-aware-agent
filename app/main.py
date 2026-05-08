@@ -30,12 +30,15 @@ def analyze_video(
     draw_non_targets: bool = Form(False),
     yolo_confidence: float = Form(0.35),
     enable_avatar: bool = Form(False),
+    avatar_person_position: str = Form("right"),
+    avatar_person_rank_from_right: int = Form(1),
 ):
     upload_dir = OUTPUTS_DIR / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
 
     suffix = Path(file.filename or "input.mp4").suffix or ".mp4"
     upload_path = upload_dir / f"{uuid.uuid4().hex}{suffix}"
+
     with open(upload_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
@@ -50,11 +53,15 @@ def analyze_video(
         draw_non_targets=draw_non_targets,
         yolo_confidence=yolo_confidence,
         enable_avatar=enable_avatar,
+        avatar_person_position=avatar_person_position,
+        avatar_person_rank_from_right=avatar_person_rank_from_right,
     )
+
     analyzer = VideoAnalyzer(config)
     summary = analyzer.analyze(upload_path)
 
     run_id = summary["run_id"]
+
     return {
         "status": "completed",
         "run_id": run_id,

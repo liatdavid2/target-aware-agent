@@ -13,6 +13,7 @@ class Detection:
     confidence: float
     class_name: str = "person"
     mask_polygon: Optional[List[List[int]]] = None
+    track_id: Optional[int] = None
 
 
 class PersonDetector:
@@ -41,11 +42,13 @@ class PersonDetector:
 
         height, width = frame_bgr.shape[:2]
 
-        results = self.model.predict(
+        results = self.model.track(
             frame_bgr,
             conf=self.confidence,
             classes=[0],
             device="cpu",
+            tracker="bytetrack.yaml",
+            persist=True,
             verbose=False,
         )
 
@@ -64,6 +67,10 @@ class PersonDetector:
         xyxy = boxes.xyxy.cpu().numpy()
         confs = boxes.conf.cpu().numpy() if boxes.conf is not None else [1.0] * len(xyxy)
 
+        track_ids = [None] * len(xyxy)
+        if getattr(boxes, "id", None) is not None:
+            track_ids = boxes.id.cpu().numpy().astype(int).tolist()
+
         mask_polygons = []
 
         if masks is not None and getattr(masks, "xy", None) is not None:
@@ -75,7 +82,7 @@ class PersonDetector:
                 else:
                     mask_polygons.append(None)
 
-        for idx, (box, conf) in enumerate(zip(xyxy, confs)):
+        for idx, (box, conf, track_id) in enumerate(zip(xyxy, confs, track_ids)):
             mask_polygon = None
 
             if idx < len(mask_polygons):
@@ -87,6 +94,7 @@ class PersonDetector:
                     confidence=float(conf),
                     class_name="person",
                     mask_polygon=mask_polygon,
+                    track_id=track_id,
                 )
             )
 
@@ -107,5 +115,6 @@ def full_frame_detection(frame_bgr: np.ndarray) -> List[Detection]:
             confidence=1.0,
             class_name="full_frame",
             mask_polygon=None,
+            track_id=None,
         )
     ]

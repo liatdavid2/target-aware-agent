@@ -17,6 +17,9 @@ from app.overlay import draw_header, draw_non_target_overlay, draw_target_overla
 from app.yolo_pose import YoloPoseEstimator, find_best_pose_for_detection
 
 
+DEFAULT_AVATAR_PERSON_POSITION = "right"
+
+
 def shirt_polygon_from_landmarks(landmarks: dict, fallback_bbox: List[int]) -> np.ndarray:
     required = ["left_shoulder", "right_shoulder", "right_hip", "left_hip"]
 
@@ -54,6 +57,7 @@ def _candidate_to_csv_row(frame_id: int, timestamp_sec: float, candidate: dict) 
         "frame_id": frame_id,
         "timestamp_sec": round(timestamp_sec, 3),
         "candidate_id": candidate["candidate_id"],
+        "track_id": candidate.get("track_id"),
         "bbox_x1": x1,
         "bbox_y1": y1,
         "bbox_x2": x2,
@@ -70,10 +74,66 @@ def _candidate_to_csv_row(frame_id: int, timestamp_sec: float, candidate: dict) 
     }
 
 
+def _candidate_center_x(candidate: dict) -> float:
+    x1, _, x2, _ = candidate["bbox"]
+    return (float(x1) + float(x2)) / 2.0
+
+
+def _select_avatar_candidate_by_rank(
+    candidates: List[dict],
+    position: str,
+    rank_from_right: int,
+) -> Optional[dict]:
+    if not candidates:
+        return None
+
+    position = (position or DEFAULT_AVATAR_PERSON_POSITION).lower()
+    rank = max(1, int(rank_from_right))
+
+    reverse = position != "left"
+
+    ordered = sorted(
+        candidates,
+        key=_candidate_center_x,
+        reverse=reverse,
+    )
+
+    index = min(rank - 1, len(ordered) - 1)
+
+    return ordered[index]
+
+
+def _select_by_track_id(
+    candidates: List[dict],
+    selected_track_id: Optional[int],
+) -> Optional[dict]:
+    if selected_track_id is None:
+        return None
+
+    for candidate in candidates:
+        if candidate.get("track_id") == selected_track_id:
+            return candidate
+
+    return None
+
+
 class VideoAnalyzer:
     def __init__(self, config: AnalyzerConfig):
         self.config = config
         self.target_color = parse_target_color(config.target_query)
+
+        self.avatar_person_position = getattr(
+            config,
+            "avatar_person_position",
+            DEFAULT_AVATAR_PERSON_POSITION,
+        )
+
+        self.avatar_person_rank_from_right = max(
+            1,
+            int(getattr(config, "avatar_person_rank_from_right", 1)),
+        )
+
+        self.selected_avatar_track_id: Optional[int] = None
 
         self.detector = (
             PersonDetector(config.yolo_model_name, config.yolo_confidence)
@@ -137,6 +197,7 @@ class VideoAnalyzer:
 
             candidate = {
                 "candidate_id": idx,
+                "track_id": getattr(det, "track_id", None),
                 "bbox": [int(v) for v in det.bbox],
                 "detector_bbox": [int(v) for v in det.bbox],
                 "mask_polygon": getattr(det, "mask_polygon", None),
@@ -158,6 +219,24 @@ class VideoAnalyzer:
 
         return candidates
 
+    def _select_target_for_avatar(self, targets: List[dict], all_candidates: List[dict]) -> Optional[dict]:
+        if self.selected_avatar_track_id is None:
+            selected = _select_avatar_candidate_by_rank(
+                candidates=targets,
+                position=self.avatar_person_position,
+                rank_from_right=self.avatar_person_rank_from_right,
+            )
+
+            if selected is not None and selected.get("track_id") is not None:
+                self.selected_avatar_track_id = selected.get("track_id")
+
+            return selected
+
+        return _select_by_track_id(
+            candidates=all_candidates,
+            selected_track_id=self.selected_avatar_track_id,
+        )
+
     def analyze(self, input_video_path: Path) -> dict:
         run_id = time.strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:8]
         run_dir = OUTPUTS_DIR / run_id
@@ -175,6 +254,7 @@ class VideoAnalyzer:
 
         input_fps = cap.get(cv2.CAP_PROP_FPS) or 24.0
         output_fps = min(15.0, input_fps) if input_fps > 0 else 15.0
+
         max_frames = (
             int(self.config.max_seconds * input_fps)
             if self.config.max_seconds > 0
@@ -185,6 +265,7 @@ class VideoAnalyzer:
         frame_report = []
         csv_rows = []
         last_candidates: List[dict] = []
+        selected_target_candidate: Optional[dict] = None
 
         frames_processed = 0
         heavy_frames = 0
@@ -234,6 +315,14 @@ class VideoAnalyzer:
                     pose_results,
                 )
 
+                targets = [c for c in last_candidates if c["is_target"]]
+
+                if self.config.enable_avatar:
+                    selected_target_candidate = self._select_target_for_avatar(
+                        targets=targets,
+                        all_candidates=last_candidates,
+                    )
+
                 heavy_frames += 1
 
             annotated = frame.copy()
@@ -242,25 +331,28 @@ class VideoAnalyzer:
             targets = [c for c in last_candidates if c["is_target"]]
             non_targets = [c for c in last_candidates if not c["is_target"]]
 
+            visible_targets = targets
+            visible_non_targets = non_targets
+
+            if self.config.enable_avatar:
+                if selected_target_candidate is not None:
+                    visible_targets = [selected_target_candidate]
+                else:
+                    visible_targets = []
+
+                visible_non_targets = []
+
             if self.config.draw_non_targets:
-                for candidate in non_targets:
+                for candidate in visible_non_targets:
                     draw_non_target_overlay(annotated, candidate)
 
-            for candidate in targets:
+            for candidate in visible_targets:
                 draw_target_overlay(annotated, candidate, self.target_color)
 
             if self.config.enable_avatar:
-                target_candidate: Optional[dict] = None
-
-                if targets:
-                    target_candidate = max(
-                        targets,
-                        key=lambda c: c.get("match_score", 0.0),
-                    )
-
-                if target_candidate is not None:
+                if selected_target_candidate is not None:
                     avatar = draw_avatar(
-                        target_candidate.get("landmarks", {}),
+                        selected_target_candidate.get("landmarks", {}),
                         height=annotated.shape[0],
                         width=360,
                     )
@@ -281,6 +373,7 @@ class VideoAnalyzer:
                     "frame_id": frames_processed,
                     "timestamp_sec": round(timestamp_sec, 3),
                     "processed_with_models": should_process,
+                    "selected_avatar_track_id": self.selected_avatar_track_id,
                     "num_candidates": len(last_candidates),
                     "num_targets": len(targets),
                     "candidates": last_candidates,
@@ -312,6 +405,7 @@ class VideoAnalyzer:
             "run_id": run_id,
             "target_query": self.config.target_query,
             "target_color": self.target_color,
+            "selected_avatar_track_id": self.selected_avatar_track_id,
             "frames_processed": frames_processed,
             "heavy_model_frames": heavy_frames,
             "elapsed_seconds": round(elapsed, 3),
@@ -336,6 +430,7 @@ class VideoAnalyzer:
             "frame_id",
             "timestamp_sec",
             "candidate_id",
+            "track_id",
             "bbox_x1",
             "bbox_y1",
             "bbox_x2",
