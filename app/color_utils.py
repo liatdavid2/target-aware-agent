@@ -6,9 +6,20 @@ from typing import Dict, Tuple
 
 COLOR_ALIASES = {
     "black": ["black", "שחור", "שחורה", "חולצה שחורה", "black shirt"],
-    "red": ["red", "אדום", "אדומה", "חולצה אדומה", "red shirt"],
-    "blue": ["blue", "כחול", "כחולה", "חולצה כחולה", "blue shirt"],
     "white": ["white", "לבן", "לבנה", "חולצה לבנה", "white shirt"],
+    "gray": ["gray", "grey", "אפור", "אפורה", "חולצה אפורה", "gray shirt", "grey shirt"],
+
+    "red": ["red", "אדום", "אדומה", "חולצה אדומה", "red shirt"],
+    "orange": ["orange", "כתום", "כתומה", "חולצה כתומה", "orange shirt"],
+    "yellow": ["yellow", "צהוב", "צהובה", "חולצה צהובה", "yellow shirt"],
+
+    "green": ["green", "ירוק", "ירוקה", "חולצה ירוקה", "green shirt"],
+    "cyan": ["cyan", "turquoise", "תכלת", "טורקיז", "חולצה תכלת", "cyan shirt", "turquoise shirt"],
+    "blue": ["blue", "כחול", "כחולה", "חולצה כחולה", "blue shirt"],
+
+    "purple": ["purple", "סגול", "סגולה", "חולצה סגולה", "purple shirt"],
+    "pink": ["pink", "ורוד", "ורודה", "חולצה ורודה", "pink shirt"],
+    "brown": ["brown", "חום", "חומה", "חולצה חומה", "brown shirt"],
 }
 
 
@@ -36,17 +47,42 @@ def _hsv_mask_for_color(hsv_pixels: np.ndarray, color_name: str) -> np.ndarray:
     v = hsv_pixels[:, 2]
 
     if color_name == "black":
-        return (v < 80).astype(np.uint8)
+        return (v < 85).astype(np.uint8)
 
     if color_name == "white":
         return ((s < 45) & (v > 170)).astype(np.uint8)
 
+    if color_name == "gray":
+        return ((s < 45) & (v >= 70) & (v <= 190)).astype(np.uint8)
+
     if color_name == "red":
-        lower_red = ((h <= 10) | (h >= 170)) & (s > 70) & (v > 50)
-        return lower_red.astype(np.uint8)
+        return (((h <= 10) | (h >= 170)) & (s > 70) & (v > 50)).astype(np.uint8)
+
+    if color_name == "orange":
+        return ((h >= 8) & (h <= 24) & (s > 70) & (v > 70)).astype(np.uint8)
+
+    if color_name == "yellow":
+        strong_yellow = (h >= 22) & (h <= 42) & (s > 45) & (v > 75)
+        beige_yellow = (h >= 12) & (h <= 45) & (s > 25) & (v > 55)
+        return (strong_yellow | beige_yellow).astype(np.uint8)
+
+    if color_name == "green":
+        return ((h >= 40) & (h <= 85) & (s > 50) & (v > 50)).astype(np.uint8)
+
+    if color_name == "cyan":
+        return ((h >= 80) & (h <= 100) & (s > 45) & (v > 60)).astype(np.uint8)
 
     if color_name == "blue":
-        return ((h >= 90) & (h <= 130) & (s > 60) & (v > 50)).astype(np.uint8)
+        return ((h >= 95) & (h <= 130) & (s > 50) & (v > 50)).astype(np.uint8)
+
+    if color_name == "purple":
+        return ((h >= 130) & (h <= 155) & (s > 45) & (v > 50)).astype(np.uint8)
+
+    if color_name == "pink":
+        return ((h >= 150) & (h <= 169) & (s > 40) & (v > 80)).astype(np.uint8)
+
+    if color_name == "brown":
+        return ((h >= 8) & (h <= 25) & (s > 45) & (v >= 35) & (v <= 170)).astype(np.uint8)
 
     return np.zeros_like(h, dtype=np.uint8)
 
