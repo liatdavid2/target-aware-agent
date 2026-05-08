@@ -49,7 +49,7 @@ def draw_target_overlay(frame, candidate: dict, target_color: str):
     score = candidate["match_score"]
     label = f"TARGET | {target_color} shirt | match {score:.2f}"
 
-    #cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 230, 255), 3)
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 230, 255), 3)
 
     draw_person_segmentation(frame, candidate)
 
