@@ -41,7 +41,7 @@ def analyze_video(
 
     with open(video_path, "rb") as f:
         files = {
-            "file": (os.path.basename(video_path), f, "video/mp4")
+        "file": (os.path.basename(video_path), f, "application/octet-stream")
         }
 
         data = {
@@ -78,7 +78,11 @@ def build_ui():
 
         with gr.Row():
             with gr.Column():
-                video_input = gr.Video(label="Input video")
+                video_input = gr.File(
+                label="Input video file",
+                file_types=[".mp4", ".avi", ".mov", ".mkv", ".webm"],
+                type="filepath",
+            )
 
                 target_query = gr.Textbox(
                     label="Target query",
