@@ -3,23 +3,53 @@ import json
 import time
 import uuid
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import cv2
 import numpy as np
 
+from app.avatar import blank_avatar, combine_with_avatar, draw_avatar
 from app.color_utils import evaluate_color_in_polygon, parse_target_color
 from app.config import AnalyzerConfig, OUTPUTS_DIR
 from app.detector import PersonDetector, full_frame_detection
 from app.geometry import resize_keep_aspect
 from app.overlay import draw_header, draw_non_target_overlay, draw_target_overlay
-from app.pose_estimator import PoseEstimator
-from app.avatar import blank_avatar, combine_with_avatar, draw_avatar
+from app.yolo_pose import YoloPoseEstimator, find_best_pose_for_detection
+
+
+def shirt_polygon_from_landmarks(landmarks: dict, fallback_bbox: List[int]) -> np.ndarray:
+    required = ["left_shoulder", "right_shoulder", "right_hip", "left_hip"]
+
+    if all(name in landmarks for name in required):
+        return np.array(
+            [
+                landmarks["left_shoulder"],
+                landmarks["right_shoulder"],
+                landmarks["right_hip"],
+                landmarks["left_hip"],
+            ],
+            dtype=np.int32,
+        )
+
+    x1, y1, x2, y2 = fallback_bbox
+    w = max(x2 - x1, 1)
+    h = max(y2 - y1, 1)
+
+    return np.array(
+        [
+            [x1 + int(0.22 * w), y1 + int(0.18 * h)],
+            [x2 - int(0.22 * w), y1 + int(0.18 * h)],
+            [x2 - int(0.18 * w), y1 + int(0.58 * h)],
+            [x1 + int(0.18 * w), y1 + int(0.58 * h)],
+        ],
+        dtype=np.int32,
+    )
 
 
 def _candidate_to_csv_row(frame_id: int, timestamp_sec: float, candidate: dict) -> dict:
     x1, y1, x2, y2 = candidate["bbox"]
     mean_h, mean_s, mean_v = candidate["mean_hsv"]
+
     return {
         "frame_id": frame_id,
         "timestamp_sec": round(timestamp_sec, 3),
@@ -44,41 +74,88 @@ class VideoAnalyzer:
     def __init__(self, config: AnalyzerConfig):
         self.config = config
         self.target_color = parse_target_color(config.target_query)
-        self.detector = PersonDetector(config.yolo_model_name, config.yolo_confidence) if config.use_yolo else None
-        self.pose_estimator = PoseEstimator()
+
+        self.detector = (
+            PersonDetector(config.yolo_model_name, config.yolo_confidence)
+            if config.use_yolo
+            else None
+        )
+
+        self.yolo_pose = YoloPoseEstimator(
+            model_name="yolov8n-pose.pt",
+            confidence=0.25,
+            keypoint_confidence=0.20,
+        )
 
     def close(self):
-        self.pose_estimator.close()
+        pass
 
     def _detect_people(self, frame: np.ndarray):
         if self.config.use_yolo:
             return self.detector.detect(frame, max_people=self.config.max_people)
+
         return full_frame_detection(frame)
 
-    def _analyze_candidates(self, frame: np.ndarray, detections) -> List[dict]:
+    def _match_pose_to_detection(self, det, pose_results):
+        if not pose_results:
+            return None
+
+        if getattr(det, "class_name", "") == "full_frame":
+            return pose_results[0]
+
+        return find_best_pose_for_detection(
+            det.bbox,
+            pose_results,
+            min_iou=0.10,
+        )
+
+    def _analyze_candidates(self, frame: np.ndarray, detections, pose_results) -> List[dict]:
         candidates = []
+
         for idx, det in enumerate(detections):
-            pose = self.pose_estimator.estimate_on_crop(frame, det.bbox)
-            color_result = evaluate_color_in_polygon(frame, pose.shirt_polygon, self.target_color)
+            matched_pose = self._match_pose_to_detection(det, pose_results)
+
+            if matched_pose is not None:
+                landmarks = matched_pose.landmarks
+                pose_detected = len(landmarks) > 0
+            else:
+                landmarks = {}
+                pose_detected = False
+
+            shirt_polygon = shirt_polygon_from_landmarks(
+                landmarks=landmarks,
+                fallback_bbox=det.bbox,
+            )
+
+            color_result = evaluate_color_in_polygon(
+                frame,
+                shirt_polygon,
+                self.target_color,
+            )
+
             is_target = color_result.match_score >= self.config.min_match_score
 
-            bbox = pose.bbox_from_pose if pose.bbox_from_pose is not None else det.bbox
             candidate = {
                 "candidate_id": idx,
-                "bbox": [int(v) for v in bbox],
+                "bbox": [int(v) for v in det.bbox],
                 "detector_bbox": [int(v) for v in det.bbox],
-                "mask_polygon": det.mask_polygon,
+                "mask_polygon": getattr(det, "mask_polygon", None),
                 "detector_confidence": float(det.confidence),
-                "pose_detected": bool(pose.pose_detected),
-                "landmarks": {k: [int(p[0]), int(p[1])] for k, p in pose.landmarks.items()},
-                "shirt_polygon": pose.shirt_polygon.astype(int).tolist(),
+                "pose_detected": bool(pose_detected),
+                "landmarks": {
+                    k: [int(p[0]), int(p[1])]
+                    for k, p in landmarks.items()
+                },
+                "shirt_polygon": shirt_polygon.astype(int).tolist(),
                 "target_color": self.target_color,
                 "match_score": float(color_result.match_score),
                 "mean_hsv": [float(x) for x in color_result.mean_hsv],
                 "shirt_pixel_count": int(color_result.pixel_count),
                 "is_target": bool(is_target),
             }
+
             candidates.append(candidate)
+
         return candidates
 
     def analyze(self, input_video_path: Path) -> dict:
@@ -92,30 +169,39 @@ class VideoAnalyzer:
         config_path = run_dir / "config.json"
 
         cap = cv2.VideoCapture(str(input_video_path))
+
         if not cap.isOpened():
             raise RuntimeError(f"Could not open video: {input_video_path}")
 
         input_fps = cap.get(cv2.CAP_PROP_FPS) or 24.0
         output_fps = min(15.0, input_fps) if input_fps > 0 else 15.0
-        max_frames = int(self.config.max_seconds * input_fps) if self.config.max_seconds > 0 else 10**9
+        max_frames = (
+            int(self.config.max_seconds * input_fps)
+            if self.config.max_seconds > 0
+            else 10**9
+        )
 
         writer = None
         frame_report = []
         csv_rows = []
         last_candidates: List[dict] = []
+
         frames_processed = 0
         heavy_frames = 0
         start_time = time.perf_counter()
 
         while True:
             ok, frame = cap.read()
+
             if not ok:
                 break
+
             if frames_processed >= max_frames:
                 break
 
             frame, _ = resize_keep_aspect(frame, self.config.resize_width)
             height, width = frame.shape[:2]
+
             if writer is None:
                 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 
@@ -130,10 +216,24 @@ class VideoAnalyzer:
                     (output_width, height),
                 )
 
-            should_process = frames_processed % max(1, self.config.process_every_n_frames) == 0
+            should_process = (
+                frames_processed % max(1, self.config.process_every_n_frames) == 0
+            )
+
             if should_process:
                 detections = self._detect_people(frame)
-                last_candidates = self._analyze_candidates(frame, detections)
+
+                pose_results = self.yolo_pose.estimate(
+                    frame,
+                    max_people=self.config.max_people,
+                )
+
+                last_candidates = self._analyze_candidates(
+                    frame,
+                    detections,
+                    pose_results,
+                )
+
                 heavy_frames += 1
 
             annotated = frame.copy()
@@ -150,7 +250,7 @@ class VideoAnalyzer:
                 draw_target_overlay(annotated, candidate, self.target_color)
 
             if self.config.enable_avatar:
-                target_candidate = None
+                target_candidate: Optional[dict] = None
 
                 if targets:
                     target_candidate = max(
@@ -175,23 +275,34 @@ class VideoAnalyzer:
             writer.write(annotated)
 
             timestamp_sec = frames_processed / input_fps if input_fps else 0.0
-            frame_report.append({
-                "frame_id": frames_processed,
-                "timestamp_sec": round(timestamp_sec, 3),
-                "processed_with_models": should_process,
-                "num_candidates": len(last_candidates),
-                "num_targets": len(targets),
-                "candidates": last_candidates,
-            })
+
+            frame_report.append(
+                {
+                    "frame_id": frames_processed,
+                    "timestamp_sec": round(timestamp_sec, 3),
+                    "processed_with_models": should_process,
+                    "num_candidates": len(last_candidates),
+                    "num_targets": len(targets),
+                    "candidates": last_candidates,
+                }
+            )
 
             for candidate in last_candidates:
-                csv_rows.append(_candidate_to_csv_row(frames_processed, timestamp_sec, candidate))
+                csv_rows.append(
+                    _candidate_to_csv_row(
+                        frames_processed,
+                        timestamp_sec,
+                        candidate,
+                    )
+                )
 
             frames_processed += 1
 
         cap.release()
+
         if writer is not None:
             writer.release()
+
         self.close()
 
         elapsed = time.perf_counter() - start_time
@@ -211,7 +322,15 @@ class VideoAnalyzer:
         }
 
         with open(report_path, "w", encoding="utf-8") as f:
-            json.dump({"summary": summary, "frames": frame_report}, f, ensure_ascii=False, indent=2)
+            json.dump(
+                {
+                    "summary": summary,
+                    "frames": frame_report,
+                },
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
 
         fieldnames = [
             "frame_id",
@@ -231,12 +350,18 @@ class VideoAnalyzer:
             "mean_v",
             "shirt_pixel_count",
         ]
+
         with open(features_path, "w", encoding="utf-8", newline="") as f:
             writer_csv = csv.DictWriter(f, fieldnames=fieldnames)
             writer_csv.writeheader()
             writer_csv.writerows(csv_rows)
 
         with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(self.config.__dict__, f, ensure_ascii=False, indent=2)
+            json.dump(
+                self.config.__dict__,
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
 
         return summary
