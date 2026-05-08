@@ -113,48 +113,6 @@ def _safe_bbox(candidate: dict) -> Tuple[int, int, int, int]:
     return int(x1), int(y1), int(x2), int(y2)
 
 
-def _draw_avatar_segmentation(canvas: np.ndarray, candidate: dict) -> None:
-    mask_polygon = candidate.get("mask_polygon")
-
-    if mask_polygon is None:
-        return
-
-    poly = np.asarray(mask_polygon, dtype=np.int32)
-
-    if poly.ndim != 2 or poly.shape[0] < 3:
-        return
-
-    fill_color = (210, 230, 255)
-    outline_color = (80, 130, 220)
-
-    overlay = canvas.copy()
-
-    cv2.fillPoly(
-        overlay,
-        [poly],
-        fill_color,
-        lineType=cv2.LINE_AA,
-    )
-
-    cv2.addWeighted(
-        overlay,
-        0.55,
-        canvas,
-        0.45,
-        0,
-        canvas,
-    )
-
-    cv2.polylines(
-        canvas,
-        [poly],
-        True,
-        outline_color,
-        2,
-        lineType=cv2.LINE_AA,
-    )
-
-
 def _draw_fallback_avatar(canvas: np.ndarray, candidate: dict) -> None:
     x1, y1, x2, y2 = _safe_bbox(candidate)
 
@@ -229,8 +187,6 @@ def _draw_fallback_avatar(canvas: np.ndarray, candidate: dict) -> None:
 
 
 def _draw_avatar_person(canvas: np.ndarray, candidate: dict) -> None:
-    _draw_avatar_segmentation(canvas, candidate)
-
     landmarks = candidate.get("landmarks", {})
     points = _get_landmark_points(landmarks)
 
@@ -240,6 +196,16 @@ def _draw_avatar_person(canvas: np.ndarray, candidate: dict) -> None:
     if not points:
         _draw_fallback_avatar(canvas, candidate)
         return
+
+    mask_polygon = candidate.get("mask_polygon")
+
+    if mask_polygon is not None:
+        poly = np.asarray(mask_polygon, dtype=np.int32)
+
+        if poly.ndim == 2 and poly.shape[0] >= 3:
+            silhouette = canvas.copy()
+            cv2.fillPoly(silhouette, [poly], (235, 240, 250))
+            cv2.addWeighted(silhouette, 0.35, canvas, 0.65, 0, canvas)
 
     body_color = (100, 170, 255)
     limb_color = (70, 120, 220)
