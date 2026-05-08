@@ -45,18 +45,18 @@ def draw_target_overlay(frame, candidate: dict, target_color: str):
     draw_pose(frame, candidate.get("landmarks", {}))
 
     y_label_top = max(0, y1 - 38)
-    cv2.rectangle(frame, (x1, y_label_top), (min(frame.shape[1] - 1, x1 + 390), y1), (0, 0, 0), -1)
-    cv2.putText(frame, label, (x1 + 7, y1 - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 230, 255), 2, cv2.LINE_AA)
+    #cv2.rectangle(frame, (x1, y_label_top), (min(frame.shape[1] - 1, x1 + 390), y1), (0, 0, 0), -1)
+    #cv2.putText(frame, label, (x1 + 7, y1 - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 230, 255), 2, cv2.LINE_AA)
 
 
 def draw_non_target_overlay(frame, candidate: dict):
     x1, y1, x2, y2 = candidate["bbox"]
-    cv2.rectangle(frame, (x1, y1), (x2, y2), (150, 150, 150), 1)
-    cv2.putText(frame, "person", (x1 + 5, max(15, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1, cv2.LINE_AA)
+    #cv2.rectangle(frame, (x1, y1), (x2, y2), (150, 150, 150), 1)
+    #cv2.putText(frame, "person", (x1 + 5, max(15, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1, cv2.LINE_AA)
 
 
 def draw_header(frame, target_query: str, frame_id: int):
     h, w = frame.shape[:2]
-    cv2.rectangle(frame, (0, 0), (w, 66), (18, 20, 25), -1)
-    cv2.putText(frame, "Target-aware video analysis", (18, 27), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2, cv2.LINE_AA)
-    cv2.putText(frame, f"target: {target_query} | frame: {frame_id}", (18, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (215, 215, 215), 1, cv2.LINE_AA)
+    #cv2.rectangle(frame, (0, 0), (w, 66), (18, 20, 25), -1)
+    #cv2.putText(frame, "Target-aware video analysis", (18, 27), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2, cv2.LINE_AA)
+    #cv2.putText(frame, f"target: {target_query} | frame: {frame_id}", (18, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (215, 215, 215), 1, cv2.LINE_AA)
