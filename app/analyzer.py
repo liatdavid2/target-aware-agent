@@ -8,7 +8,7 @@ from typing import List, Optional
 import cv2
 import numpy as np
 
-from app.avatar import blank_avatar, combine_with_avatar, draw_avatar
+from app.avatar import blank_avatar, combine_with_avatar, draw_avatar, draw_multi_avatar
 from app.color_utils import evaluate_color_in_polygon, parse_target_color
 from app.config import AnalyzerConfig, OUTPUTS_DIR
 from app.detector import PersonDetector, full_frame_detection
@@ -250,25 +250,18 @@ class VideoAnalyzer:
                 draw_target_overlay(annotated, candidate, self.target_color)
 
             if self.config.enable_avatar:
-                target_candidate: Optional[dict] = None
+                sorted_targets = sorted(
+                    targets,
+                    key=lambda c: c.get("match_score", 0.0),
+                    reverse=True,
+                )
 
-                if targets:
-                    target_candidate = max(
-                        targets,
-                        key=lambda c: c.get("match_score", 0.0),
-                    )
-
-                if target_candidate is not None:
-                    avatar = draw_avatar(
-                        target_candidate.get("landmarks", {}),
-                        height=annotated.shape[0],
-                        width=360,
-                    )
-                else:
-                    avatar = blank_avatar(
-                        height=annotated.shape[0],
-                        width=360,
-                    )
+                avatar = draw_multi_avatar(
+                    candidates=sorted_targets,
+                    height=annotated.shape[0],
+                    width=360,
+                    max_avatars=2,
+                )
 
                 annotated = combine_with_avatar(annotated, avatar)
 
