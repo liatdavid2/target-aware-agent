@@ -3,33 +3,18 @@ import json
 import time
 import uuid
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 import cv2
 import numpy as np
 
+from app.avatar import blank_avatar, combine_with_avatar, draw_avatar, draw_multi_avatar
 from app.color_utils import evaluate_color_in_polygon, parse_target_color
 from app.config import AnalyzerConfig, OUTPUTS_DIR
 from app.detector import PersonDetector, full_frame_detection
 from app.geometry import resize_keep_aspect
 from app.overlay import draw_header, draw_non_target_overlay, draw_target_overlay
 from app.yolo_pose import YoloPoseEstimator, find_best_pose_for_detection
-
-
-AVATAR_CONNECTIONS = [
-    ("left_shoulder", "right_shoulder"),
-    ("left_shoulder", "left_elbow"),
-    ("left_elbow", "left_wrist"),
-    ("right_shoulder", "right_elbow"),
-    ("right_elbow", "right_wrist"),
-    ("left_shoulder", "left_hip"),
-    ("right_shoulder", "right_hip"),
-    ("left_hip", "right_hip"),
-    ("left_hip", "left_knee"),
-    ("left_knee", "left_ankle"),
-    ("right_hip", "right_knee"),
-    ("right_knee", "right_ankle"),
-]
 
 
 def shirt_polygon_from_landmarks(landmarks: dict, fallback_bbox: List[int]) -> np.ndarray:
@@ -85,226 +70,6 @@ def _candidate_to_csv_row(frame_id: int, timestamp_sec: float, candidate: dict) 
     }
 
 
-def _point_from_landmark(value) -> Optional[Tuple[int, int]]:
-    if value is None:
-        return None
-
-    if len(value) < 2:
-        return None
-
-    return int(value[0]), int(value[1])
-
-
-def _get_landmark_points(landmarks: dict) -> dict:
-    points = {}
-
-    for name, value in landmarks.items():
-        point = _point_from_landmark(value)
-
-        if point is not None:
-            points[name] = point
-
-    return points
-
-
-def _safe_bbox(candidate: dict) -> Tuple[int, int, int, int]:
-    x1, y1, x2, y2 = candidate["bbox"]
-
-    return int(x1), int(y1), int(x2), int(y2)
-
-
-def _draw_fallback_avatar(canvas: np.ndarray, candidate: dict) -> None:
-    x1, y1, x2, y2 = _safe_bbox(candidate)
-
-    person_w = max(x2 - x1, 1)
-    person_h = max(y2 - y1, 1)
-
-    center_x = x1 + person_w // 2
-
-    head_radius = max(8, int(person_w * 0.16))
-    head_center = (center_x, y1 + int(person_h * 0.16))
-
-    body_top = y1 + int(person_h * 0.28)
-    body_bottom = y1 + int(person_h * 0.70)
-
-    body_color = (100, 170, 255)
-    limb_color = (70, 120, 220)
-    head_color = (210, 210, 210)
-    outline_color = (40, 40, 40)
-
-    cv2.circle(canvas, head_center, head_radius, head_color, -1, lineType=cv2.LINE_AA)
-    cv2.circle(canvas, head_center, head_radius, outline_color, 2, lineType=cv2.LINE_AA)
-
-    cv2.ellipse(
-        canvas,
-        (center_x, (body_top + body_bottom) // 2),
-        (max(10, int(person_w * 0.22)), max(20, int(person_h * 0.22))),
-        0,
-        0,
-        360,
-        body_color,
-        -1,
-        lineType=cv2.LINE_AA,
-    )
-
-    thickness = max(3, int(person_w * 0.05))
-
-    cv2.line(
-        canvas,
-        (center_x - int(person_w * 0.22), body_top),
-        (center_x - int(person_w * 0.38), body_bottom),
-        limb_color,
-        thickness,
-        lineType=cv2.LINE_AA,
-    )
-
-    cv2.line(
-        canvas,
-        (center_x + int(person_w * 0.22), body_top),
-        (center_x + int(person_w * 0.38), body_bottom),
-        limb_color,
-        thickness,
-        lineType=cv2.LINE_AA,
-    )
-
-    cv2.line(
-        canvas,
-        (center_x - int(person_w * 0.10), body_bottom),
-        (center_x - int(person_w * 0.20), y2),
-        limb_color,
-        thickness,
-        lineType=cv2.LINE_AA,
-    )
-
-    cv2.line(
-        canvas,
-        (center_x + int(person_w * 0.10), body_bottom),
-        (center_x + int(person_w * 0.20), y2),
-        limb_color,
-        thickness,
-        lineType=cv2.LINE_AA,
-    )
-
-
-def _draw_avatar_person(canvas: np.ndarray, candidate: dict) -> None:
-    landmarks = candidate.get("landmarks", {})
-    points = _get_landmark_points(landmarks)
-
-    x1, y1, x2, y2 = _safe_bbox(candidate)
-    person_w = max(x2 - x1, 1)
-
-    if not points:
-        _draw_fallback_avatar(canvas, candidate)
-        return
-
-    mask_polygon = candidate.get("mask_polygon")
-
-    if mask_polygon is not None:
-        poly = np.asarray(mask_polygon, dtype=np.int32)
-
-        if poly.ndim == 2 and poly.shape[0] >= 3:
-            silhouette = canvas.copy()
-            cv2.fillPoly(silhouette, [poly], (235, 240, 250))
-            cv2.addWeighted(silhouette, 0.35, canvas, 0.65, 0, canvas)
-
-    body_color = (100, 170, 255)
-    limb_color = (70, 120, 220)
-    joint_color = (35, 35, 35)
-    head_color = (220, 220, 220)
-
-    line_thickness = max(3, int(person_w * 0.045))
-    joint_radius = max(4, int(person_w * 0.035))
-
-    torso_names = ["left_shoulder", "right_shoulder", "right_hip", "left_hip"]
-
-    if all(name in points for name in torso_names):
-        torso = np.array(
-            [
-                points["left_shoulder"],
-                points["right_shoulder"],
-                points["right_hip"],
-                points["left_hip"],
-            ],
-            dtype=np.int32,
-        )
-
-        cv2.fillPoly(canvas, [torso], body_color, lineType=cv2.LINE_AA)
-        cv2.polylines(canvas, [torso], True, joint_color, 2, lineType=cv2.LINE_AA)
-
-    for a, b in AVATAR_CONNECTIONS:
-        if a not in points or b not in points:
-            continue
-
-        color = body_color if "shoulder" in a or "hip" in a else limb_color
-
-        cv2.line(
-            canvas,
-            points[a],
-            points[b],
-            color,
-            line_thickness,
-            lineType=cv2.LINE_AA,
-        )
-
-    head_center = None
-
-    if "nose" in points:
-        head_center = points["nose"]
-    elif "left_shoulder" in points and "right_shoulder" in points:
-        lx, ly = points["left_shoulder"]
-        rx, ry = points["right_shoulder"]
-        head_center = ((lx + rx) // 2, min(ly, ry) - int(person_w * 0.22))
-
-    if head_center is not None:
-        head_radius = max(8, int(person_w * 0.14))
-
-        cv2.circle(
-            canvas,
-            head_center,
-            head_radius,
-            head_color,
-            -1,
-            lineType=cv2.LINE_AA,
-        )
-
-        cv2.circle(
-            canvas,
-            head_center,
-            head_radius,
-            joint_color,
-            2,
-            lineType=cv2.LINE_AA,
-        )
-
-    for point in points.values():
-        cv2.circle(
-            canvas,
-            point,
-            joint_radius,
-            joint_color,
-            -1,
-            lineType=cv2.LINE_AA,
-        )
-
-
-def draw_natural_avatar_frame(
-    frame_shape,
-    candidates: List[dict],
-    target_query: str,
-    frame_id: int,
-) -> np.ndarray:
-    height, width = frame_shape[:2]
-
-    avatar_frame = np.full((height, width, 3), 245, dtype=np.uint8)
-
-    draw_header(avatar_frame, target_query, frame_id)
-
-    for candidate in candidates:
-        _draw_avatar_person(avatar_frame, candidate)
-
-    return avatar_frame
-
-
 class VideoAnalyzer:
     def __init__(self, config: AnalyzerConfig):
         self.config = config
@@ -325,18 +90,9 @@ class VideoAnalyzer:
     def close(self):
         pass
 
-    def _max_people_for_processing(self) -> int:
-        if self.config.enable_avatar:
-            return max(2, int(self.config.max_people))
-
-        return int(self.config.max_people)
-
     def _detect_people(self, frame: np.ndarray):
         if self.config.use_yolo:
-            return self.detector.detect(
-                frame,
-                max_people=self._max_people_for_processing(),
-            )
+            return self.detector.detect(frame, max_people=self.config.max_people)
 
         return full_frame_detection(frame)
 
@@ -419,7 +175,6 @@ class VideoAnalyzer:
 
         input_fps = cap.get(cv2.CAP_PROP_FPS) or 24.0
         output_fps = min(15.0, input_fps) if input_fps > 0 else 15.0
-
         max_frames = (
             int(self.config.max_seconds * input_fps)
             if self.config.max_seconds > 0
@@ -450,14 +205,15 @@ class VideoAnalyzer:
             if writer is None:
                 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 
-                output_width = width * 2 if self.config.enable_avatar else width
-                output_height = height
+                output_width = width
+                if self.config.enable_avatar:
+                    output_width = width + 360
 
                 writer = cv2.VideoWriter(
                     str(output_video_path),
                     fourcc,
                     output_fps,
-                    (output_width, output_height),
+                    (output_width, height),
                 )
 
             should_process = (
@@ -469,7 +225,7 @@ class VideoAnalyzer:
 
                 pose_results = self.yolo_pose.estimate(
                     frame,
-                    max_people=self._max_people_for_processing(),
+                    max_people=self.config.max_people,
                 )
 
                 last_candidates = self._analyze_candidates(
@@ -500,16 +256,14 @@ class VideoAnalyzer:
                     reverse=True,
                 )
 
-                sorted_targets = sorted_targets[: self._max_people_for_processing()]
-
-                avatar_frame = draw_natural_avatar_frame(
-                    frame_shape=frame.shape,
+                avatar = draw_multi_avatar(
                     candidates=sorted_targets,
-                    target_query=self.config.target_query,
-                    frame_id=frames_processed,
+                    height=annotated.shape[0],
+                    width=360,
+                    max_avatars=2,
                 )
 
-                annotated = np.hstack([annotated, avatar_frame])
+                annotated = combine_with_avatar(annotated, avatar)
 
             writer.write(annotated)
 

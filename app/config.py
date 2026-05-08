@@ -21,4 +21,4 @@ class AnalyzerConfig:
     draw_non_targets: bool = False
     yolo_confidence: float = 0.35
     yolo_model_name: str = "yolov8n-seg.pt"
-    enable_avatar: bool = True
+    enable_avatar: bool = False
