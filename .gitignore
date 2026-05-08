@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+outputs/
+data/
+*.log
+*.avi
+*.mp4
+models/*.pt
+models/*.onnx
+.DS_Store
